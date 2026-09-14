@@ -450,7 +450,7 @@ object StandaloneApkGenerator {
         validityOut.write(afterStr)
         val valBytes = validityOut.toByteArray()
         tbsOut.write(0x30)
-        tbsOut.write(valBytes.size)
+        writeDerLength(tbsOut, valBytes.size)
         tbsOut.write(valBytes)
 
         tbsOut.write(name) // subject
@@ -470,7 +470,7 @@ object StandaloneApkGenerator {
         certOut.write(sigAlg)
         // Bit string
         certOut.write(0x03)
-        certOut.write(sig.size + 1)
+        writeDerLength(certOut, sig.size + 1)
         certOut.write(0x00) // unused bits
         certOut.write(sig)
 

@@ -65,6 +65,12 @@ final installedAppsProvider = FutureProvider<List<AppInfo>>((ref) async {
   // Provide sample fallback apps for testing/emulators without full Play Services
   return [
     const AppInfo(
+      packageName: 'com.paypal.android.p2pmobile',
+      appName: 'PayPal',
+      versionCode: 85200,
+      versionName: '8.52.0',
+    ),
+    const AppInfo(
       packageName: 'com.whatsapp',
       appName: 'WhatsApp Messenger',
       versionCode: 22409,

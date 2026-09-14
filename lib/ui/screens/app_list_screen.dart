@@ -250,7 +250,8 @@ class _AppListScreenState extends ConsumerState<AppListScreen> {
 
   bool _isSocialApp(String pkg) {
     final lower = pkg.toLowerCase();
-    return lower.contains('whatsapp') ||
+    return lower.contains('paypal') ||
+        lower.contains('whatsapp') ||
         lower.contains('telegram') ||
         lower.contains('facebook') ||
         lower.contains('instagram') ||
