@@ -45,5 +45,6 @@ flutter {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("com.android.tools.build:apksig:8.2.2")
 }
 

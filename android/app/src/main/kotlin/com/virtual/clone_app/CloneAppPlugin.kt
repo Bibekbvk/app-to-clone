@@ -527,7 +527,19 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             }
         } catch (_: Exception) {}
 
-        // 3. Fallback: Launch Native Hub where user can install standalone APK or launch original app
+        // 3. Priority: If APK is staged and ready to install, prompt installer directly
+        try {
+            val apkDir = File(context.filesDir, "cloned_apks/$cloneId")
+            val sanitizedAppName = (displayName ?: targetPkg).replace(Regex("[^a-zA-Z0-9_]"), "")
+            val badge = "C-$padId"
+            val targetApk = File(apkDir, "${sanitizedAppName}_Clone_${badge}.apk")
+            if (targetApk.exists() && targetApk.length() > 0) {
+                com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(context, targetApk)
+                return
+            }
+        } catch (_: Exception) {}
+
+        // 4. Fallback: Launch stub activity
         val stubClassName = getStubActivityClass(cloneId, isSingleTask)
 
         val intent = Intent().apply {

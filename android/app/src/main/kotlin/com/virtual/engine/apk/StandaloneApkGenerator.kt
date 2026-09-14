@@ -83,8 +83,8 @@ object StandaloneApkGenerator {
                 origCertBytes = if (certFile.exists()) certFile.readBytes() else null
             )
 
-            // 4. Sign APK with test key
-            signApk(tempUnsignedApk, targetApk)
+            // 4. Sign APK with official Android ApkSigner (v1 + v2 + v3)
+            signApk(context, tempUnsignedApk, targetApk)
             tempUnsignedApk.delete()
 
             return targetApk
@@ -379,244 +379,31 @@ object StandaloneApkGenerator {
     }
 
     /**
-     * Signs the generated APK using standard APK v1 (JAR) signature.
+     * Signs the generated APK using official Android ApkSigner with v1, v2, and v3 schemes.
      */
-    private fun signApk(unsignedApk: File, signedApk: File) {
-        // Generate test keypair
-        val keyGen = KeyPairGenerator.getInstance("RSA")
-        keyGen.initialize(2048)
-        val keyPair = keyGen.generateKeyPair()
-
-        // Create self-signed X509 certificate
-        val cert = createSelfSignedCertificate(keyPair)
-
-        // Calculate SHA-256 for all entries and write MANIFEST.MF & CERT.SF
-        val manifestBuilder = StringBuilder()
-        manifestBuilder.append("Manifest-Version: 1.0\r\n")
-        manifestBuilder.append("Created-By: 1.0 (App to Clone Standalone)\r\n\r\n")
-
-        val digest = MessageDigest.getInstance("SHA-256")
-
-        ZipInputStream(BufferedInputStream(FileInputStream(unsignedApk))).use { zis ->
-            val buf = ByteArray(16384)
-            var entry = zis.nextEntry
-            while (entry != null) {
-                if (!entry.isDirectory && !entry.name.startsWith("META-INF/")) {
-                    digest.reset()
-                    var bytesRead: Int
-                    while (zis.read(buf).also { bytesRead = it } > 0) {
-                        digest.update(buf, 0, bytesRead)
-                    }
-                    val hash = Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
-                    manifestBuilder.append("Name: ${entry.name}\r\n")
-                    manifestBuilder.append("SHA-256-Digest: $hash\r\n\r\n")
-                }
-                entry = zis.nextEntry
-            }
+    private fun signApk(context: Context, unsignedApk: File, signedApk: File) {
+        val ks = KeyStore.getInstance("PKCS12")
+        context.assets.open("clone_signer.p12").use { input ->
+            ks.load(input, "cloneapp".toCharArray())
         }
+        val privateKey = ks.getKey("clonekey", "cloneapp".toCharArray()) as PrivateKey
+        val cert = ks.getCertificate("clonekey") as X509Certificate
 
-        val manifestBytes = manifestBuilder.toString().toByteArray(Charsets.UTF_8)
-        val manifestDigest = Base64.encodeToString(digest.digest(manifestBytes), Base64.NO_WRAP)
+        val signerConfig = com.android.apksig.ApkSigner.SignerConfig.Builder(
+            "clonekey",
+            privateKey,
+            listOf(cert)
+        ).build()
 
-        val sfBuilder = StringBuilder()
-        sfBuilder.append("Signature-Version: 1.0\r\n")
-        sfBuilder.append("Created-By: 1.0 (App to Clone Standalone)\r\n")
-        sfBuilder.append("SHA-256-Digest-Manifest: $manifestDigest\r\n\r\n")
+        val signer = com.android.apksig.ApkSigner.Builder(listOf(signerConfig))
+            .setInputApk(unsignedApk)
+            .setOutputApk(signedApk)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .build()
 
-        val sfBytes = sfBuilder.toString().toByteArray(Charsets.UTF_8)
-
-        // Sign CERT.SF with RSA private key
-        val rsaSignature = Signature.getInstance("SHA256withRSA").apply {
-            initSign(keyPair.private)
-            update(sfBytes)
-        }.sign()
-
-        // Create PKCS7 SignedData block
-        val certRsaBytes = createPkcs7Block(sfBytes, rsaSignature, cert)
-
-        // Copy everything to signed APK and write META-INF entries
-        ZipInputStream(BufferedInputStream(FileInputStream(unsignedApk))).use { zis ->
-            ZipOutputStream(BufferedOutputStream(FileOutputStream(signedApk))).use { zos ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val newEntry = ZipEntry(entry.name)
-                    zos.putNextEntry(newEntry)
-                    zis.copyTo(zos)
-                    zos.closeEntry()
-                    entry = zis.nextEntry
-                }
-
-                // Write META-INF/MANIFEST.MF
-                zos.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
-                zos.write(manifestBytes)
-                zos.closeEntry()
-
-                // Write META-INF/CERT.SF
-                zos.putNextEntry(ZipEntry("META-INF/CERT.SF"))
-                zos.write(sfBytes)
-                zos.closeEntry()
-
-                // Write META-INF/CERT.RSA
-                zos.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
-                zos.write(certRsaBytes)
-                zos.closeEntry()
-            }
-        }
-    }
-
-    private fun createSelfSignedCertificate(keyPair: KeyPair): X509Certificate {
-        // Minimal X.509 self-signed certificate generator using standard Sun/Android ASN.1
-        val certBytes = generateDerCertificateBytes(keyPair)
-        val certFactory = CertificateFactory.getInstance("X.509")
-        return certFactory.generateCertificate(ByteArrayInputStream(certBytes)) as X509Certificate
-    }
-
-    private fun generateDerCertificateBytes(keyPair: KeyPair): ByteArray {
-        val now = System.currentTimeMillis()
-        val notBefore = now - 3600000L
-        val notAfter = now + (10L * 365 * 86400 * 1000L) // 10 years
-
-        val pubKey = keyPair.public.encoded
-        val sigAlg = byteArrayOf(0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00) // sha256WithRSAEncryption
-
-        // Simplified self-signed cert payload
-        val tbsOut = ByteArrayOutputStream()
-        tbsOut.write(byteArrayOf(0xa0.toByte(), 0x03, 0x02, 0x01, 0x02)) // version 2
-        tbsOut.write(byteArrayOf(0x02, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08)) // serial
-        tbsOut.write(sigAlg)
-
-        val name = byteArrayOf(0x30, 0x1c, 0x31, 0x1a, 0x30, 0x18, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x11, 0x41, 0x70, 0x70, 0x20, 0x74, 0x6f, 0x20, 0x43, 0x6c, 0x6f, 0x6e, 0x65, 0x20, 0x53, 0x44, 0x4b) // CN=App to Clone SDK
-        tbsOut.write(name) // issuer
-
-        // Validity
-        val validityOut = ByteArrayOutputStream()
-        val timeFmt = java.text.SimpleDateFormat("yyMMddHHmmss'Z'", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
-        val beforeStr = timeFmt.format(java.util.Date(notBefore)).toByteArray(Charsets.US_ASCII)
-        val afterStr = timeFmt.format(java.util.Date(notAfter)).toByteArray(Charsets.US_ASCII)
-        validityOut.write(0x17)
-        validityOut.write(beforeStr.size)
-        validityOut.write(beforeStr)
-        validityOut.write(0x17)
-        validityOut.write(afterStr.size)
-        validityOut.write(afterStr)
-        val valBytes = validityOut.toByteArray()
-        tbsOut.write(0x30)
-        writeDerLength(tbsOut, valBytes.size)
-        tbsOut.write(valBytes)
-
-        tbsOut.write(name) // subject
-        tbsOut.write(pubKey) // public key
-
-        val tbsBytes = tbsOut.toByteArray()
-        val wrappedTbs = wrapDerSequence(tbsBytes)
-
-        // Sign TBS
-        val sig = Signature.getInstance("SHA256withRSA").apply {
-            initSign(keyPair.private)
-            update(wrappedTbs)
-        }.sign()
-
-        val certOut = ByteArrayOutputStream()
-        certOut.write(wrappedTbs)
-        certOut.write(sigAlg)
-        // Bit string
-        certOut.write(0x03)
-        writeDerLength(certOut, sig.size + 1)
-        certOut.write(0x00) // unused bits
-        certOut.write(sig)
-
-        return wrapDerSequence(certOut.toByteArray())
-    }
-
-    private fun wrapDerSequence(content: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream()
-        out.write(0x30)
-        writeDerLength(out, content.size)
-        out.write(content)
-        return out.toByteArray()
-    }
-
-    private fun writeDerLength(out: OutputStream, length: Int) {
-        if (length < 128) {
-            out.write(length)
-        } else if (length < 256) {
-            out.write(0x81)
-            out.write(length)
-        } else if (length < 65536) {
-            out.write(0x82)
-            out.write((length shr 8) and 0xFF)
-            out.write(length and 0xFF)
-        } else {
-            out.write(0x83)
-            out.write((length shr 16) and 0xFF)
-            out.write((length shr 8) and 0xFF)
-            out.write(length and 0xFF)
-        }
-    }
-
-    private fun createPkcs7Block(contentToSign: ByteArray, signature: ByteArray, cert: X509Certificate): ByteArray {
-        val certBytes = cert.encoded
-
-        // SignerInfo
-        val signerInfo = ByteArrayOutputStream()
-        signerInfo.write(byteArrayOf(0x02, 0x01, 0x01)) // version 1
-        // IssuerAndSerialNumber
-        val issuerAndSerial = ByteArrayOutputStream()
-        issuerAndSerial.write(cert.issuerX500Principal.encoded)
-        val serialBytes = cert.serialNumber.toByteArray()
-        issuerAndSerial.write(0x02)
-        writeDerLength(issuerAndSerial, serialBytes.size)
-        issuerAndSerial.write(serialBytes)
-        signerInfo.write(wrapDerSequence(issuerAndSerial.toByteArray()))
-
-        // DigestAlgorithmIdentifier: SHA-256
-        signerInfo.write(byteArrayOf(0x30, 0x0d, 0x06, 0x09, 0x60, 0x86.toByte(), 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00))
-        // DigestEncryptionAlgorithmIdentifier: RSA
-        signerInfo.write(byteArrayOf(0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00))
-
-        // EncryptedDigest (the RSA signature)
-        signerInfo.write(0x04)
-        writeDerLength(signerInfo, signature.size)
-        signerInfo.write(signature)
-
-        val signerInfoBytes = wrapDerSequence(signerInfo.toByteArray())
-        val signerInfosSet = ByteArrayOutputStream().apply {
-            write(0x31)
-            writeDerLength(this, signerInfoBytes.size)
-            write(signerInfoBytes)
-        }.toByteArray()
-
-        // SignedData
-        val signedData = ByteArrayOutputStream()
-        signedData.write(byteArrayOf(0x02, 0x01, 0x01)) // version 1
-        // DigestAlgorithms: SET of sha256
-        signedData.write(byteArrayOf(0x31, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86.toByte(), 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00))
-        // ContentInfo: pkcs7-data (empty/detached)
-        signedData.write(byteArrayOf(0x30, 0x0b, 0x06, 0x09, 0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x07, 0x01))
-
-        // Certificates [0] IMPLICIT SET OF
-        val certsOut = ByteArrayOutputStream()
-        certsOut.write(0xa0)
-        writeDerLength(certsOut, certBytes.size)
-        certsOut.write(certBytes)
-        signedData.write(certsOut.toByteArray())
-
-        // SignerInfos
-        signedData.write(signerInfosSet)
-
-        val signedDataSeq = wrapDerSequence(signedData.toByteArray())
-
-        // ContentInfo wrapping SignedData
-        val contentInfo = ByteArrayOutputStream()
-        contentInfo.write(byteArrayOf(0x06, 0x09, 0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x07, 0x02)) // 1.2.840.113549.1.7.2 (signedData)
-        val taggedSignedData = ByteArrayOutputStream().apply {
-            write(0xa0)
-            writeDerLength(this, signedDataSeq.size)
-            write(signedDataSeq)
-        }.toByteArray()
-        contentInfo.write(taggedSignedData)
-
-        return wrapDerSequence(contentInfo.toByteArray())
+        signer.sign()
     }
 
     /**

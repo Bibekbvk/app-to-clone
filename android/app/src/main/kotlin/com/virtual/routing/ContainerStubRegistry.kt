@@ -103,8 +103,19 @@ open class BaseContainerStubActivity : Activity() {
             } catch (_: Exception) {}
         }
 
-        // Check if app is installed in a dual/work profile (User 12 Island / User 128 Twin)
-        var hasDualProfile = false
+        val padId = String.format("%02d", profileId)
+        val standalonePkg = "$targetPackage.c$padId"
+
+        // DIRECT LAUNCH 1: If standalone separate package is installed, open it directly!
+        val standaloneIntent = packageManager.getLaunchIntentForPackage(standalonePkg)
+        if (standaloneIntent != null) {
+            standaloneIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(standaloneIntent)
+            finish()
+            return
+        }
+
+        // DIRECT LAUNCH 2: If app is installed in a dual/work/twin profile (User 12 / 128 / 10), open real native dual app!
         val launcherApps = getSystemService(Context.LAUNCHER_APPS_SERVICE) as? android.content.pm.LauncherApps
         val userManager = getSystemService(Context.USER_SERVICE) as? android.os.UserManager
         if (launcherApps != null && userManager != null) {
@@ -112,16 +123,26 @@ open class BaseContainerStubActivity : Activity() {
                 if (user != android.os.Process.myUserHandle()) {
                     val acts = launcherApps.getActivityList(targetPackage, user)
                     if (acts.isNotEmpty()) {
-                        hasDualProfile = true
-                        break
+                        launcherApps.startMainActivity(acts[0].componentName, user, null, null)
+                        finish()
+                        return
                     }
                 }
             }
         }
 
-        // Build 100% Native Hub View (No web browsers)
-        val padId = String.format("%02d", profileId)
-        val rootView = buildNativeHubView(profileId, targetPackage, targetAppName, displayBadge, cardTitle, padId, hasDualProfile)
+        // DIRECT LAUNCH 3: If APK is staged and ready to install, prompt installer immediately
+        val apkDir = File(filesDir, "cloned_apks/$profileId")
+        val sanitizedAppName = targetAppName.replace(Regex("[^a-zA-Z0-9_]"), "")
+        val targetApk = File(apkDir, "${sanitizedAppName}_Clone_${displayBadge}.apk")
+        if (targetApk.exists() && targetApk.length() > 0) {
+            com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(this, targetApk)
+            finish()
+            return
+        }
+
+        // Fallback: If not yet installed or prepared, show diagnostic view
+        val rootView = buildNativeHubView(profileId, targetPackage, targetAppName, displayBadge, cardTitle, padId, false)
         setContentView(rootView)
     }
 
