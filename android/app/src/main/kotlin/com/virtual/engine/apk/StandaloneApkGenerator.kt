@@ -55,8 +55,9 @@ object StandaloneApkGenerator {
         }
 
         try {
-            // 1. Locate source APK
-            val sourceApk = findSourceApk(context, targetPackage) ?: run {
+            // 1. Locate source APK and splits
+            val bundle = findSourceApks(context, targetPackage)
+            val sourceApk = bundle.baseApk ?: run {
                 Log.e(TAG, "Source APK not found for package $targetPackage")
                 return null
             }
@@ -71,10 +72,11 @@ object StandaloneApkGenerator {
                 OriginalSignatureProvider.saveOriginalSignatures(targetPackage, sigs, certFile)
             }
 
-            // 3. Mutate Manifest and Repack APK
+            // 3. Mutate Manifest and Repack APK with all splits merged
             val tempUnsignedApk = File(apkDir, "temp_unsigned.apk")
             repackAndMutateApk(
                 srcApk = sourceApk,
+                splitApks = bundle.splitApks,
                 destApk = tempUnsignedApk,
                 targetPackage = targetPackage,
                 newPackage = newPackage,
@@ -92,8 +94,10 @@ object StandaloneApkGenerator {
         }
     }
 
-    private fun findSourceApk(context: Context, packageName: String): File? {
-        // Method A: Check device installed application
+    data class SourceApkBundle(val baseApk: File?, val splitApks: List<File>)
+
+    private fun findSourceApks(context: Context, packageName: String): SourceApkBundle {
+        // Method A: Check device installed application and all split directories
         try {
             val appInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
@@ -102,30 +106,42 @@ object StandaloneApkGenerator {
                 context.packageManager.getApplicationInfo(packageName, 0)
             }
             val src = File(appInfo.sourceDir)
-            if (src.exists() && src.length() > 0) return src
+            val splits = mutableListOf<File>()
+            appInfo.splitSourceDirs?.forEach { path ->
+                val splitFile = File(path)
+                if (splitFile.exists() && splitFile.length() > 0) {
+                    splits.add(splitFile)
+                }
+            }
+            if (src.exists() && src.length() > 0) {
+                return SourceApkBundle(src, splits)
+            }
         } catch (_: Exception) {}
 
         // Method B: Check app files/clones/<id>/base.apk
         val clonesRoot = File(context.filesDir, "clones")
         clonesRoot.listFiles()?.forEach { dir ->
             val apk = File(dir, "base.apk")
-            if (apk.exists() && apk.length() > 1000) return apk
+            if (apk.exists() && apk.length() > 1000) return SourceApkBundle(apk, emptyList())
         }
 
-        return null
+        return SourceApkBundle(null, emptyList())
     }
 
     /**
-     * Reads source APK zip, mutates AndroidManifest.xml, embeds orig_cert.bin,
-     * strips existing META-INF signature files, and writes to destApk.
+     * Reads source APK zip, mutates AndroidManifest.xml, merges all split APKs (native C++ libs, drawables),
+     * embeds orig_cert.bin, strips existing META-INF signatures, and produces a complete self-contained APK.
      */
     private fun repackAndMutateApk(
         srcApk: File,
+        splitApks: List<File>,
         destApk: File,
         targetPackage: String,
         newPackage: String,
         origCertBytes: ByteArray?
     ) {
+        val addedEntries = HashSet<String>()
+
         ZipInputStream(BufferedInputStream(FileInputStream(srcApk))).use { zis ->
             ZipOutputStream(BufferedOutputStream(FileOutputStream(destApk))).use { zos ->
                 var entry: ZipEntry? = zis.nextEntry
@@ -148,14 +164,43 @@ object StandaloneApkGenerator {
                         zos.putNextEntry(newEntry)
                         zos.write(mutatedManifest)
                         zos.closeEntry()
+                        addedEntries.add(name)
                     } else {
-                        val newEntry = ZipEntry(name)
-                        zos.putNextEntry(newEntry)
-                        zis.copyTo(zos)
-                        zos.closeEntry()
+                        if (!addedEntries.contains(name)) {
+                            val newEntry = ZipEntry(name)
+                            zos.putNextEntry(newEntry)
+                            zis.copyTo(zos)
+                            zos.closeEntry()
+                            addedEntries.add(name)
+                        }
                     }
 
                     entry = zis.nextEntry
+                }
+
+                // Merge all split APK entries (native .so files from split_config.arm64_v8a, resources from split_config.xxhdpi, etc.)
+                for (split in splitApks) {
+                    try {
+                        ZipInputStream(BufferedInputStream(FileInputStream(split))).use { splitZis ->
+                            var splitEntry = splitZis.nextEntry
+                            while (splitEntry != null) {
+                                val sName = splitEntry.name
+                                if (!sName.startsWith("META-INF/") && 
+                                    sName != "AndroidManifest.xml" && 
+                                    !addedEntries.contains(sName)
+                                ) {
+                                    val newEntry = ZipEntry(sName)
+                                    zos.putNextEntry(newEntry)
+                                    splitZis.copyTo(zos)
+                                    zos.closeEntry()
+                                    addedEntries.add(sName)
+                                }
+                                splitEntry = splitZis.nextEntry
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error merging split ${split.name}: ${e.message}")
+                    }
                 }
 
                 // Inject assets/orig_cert.bin if present
@@ -164,6 +209,7 @@ object StandaloneApkGenerator {
                     zos.putNextEntry(certEntry)
                     zos.write(origCertBytes)
                     zos.closeEntry()
+                    addedEntries.add("assets/orig_cert.bin")
                 }
             }
         }
@@ -352,11 +398,16 @@ object StandaloneApkGenerator {
         val digest = MessageDigest.getInstance("SHA-256")
 
         ZipInputStream(BufferedInputStream(FileInputStream(unsignedApk))).use { zis ->
+            val buf = ByteArray(16384)
             var entry = zis.nextEntry
             while (entry != null) {
                 if (!entry.isDirectory && !entry.name.startsWith("META-INF/")) {
-                    val content = zis.readBytes()
-                    val hash = Base64.encodeToString(digest.digest(content), Base64.NO_WRAP)
+                    digest.reset()
+                    var bytesRead: Int
+                    while (zis.read(buf).also { bytesRead = it } > 0) {
+                        digest.update(buf, 0, bytesRead)
+                    }
+                    val hash = Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
                     manifestBuilder.append("Name: ${entry.name}\r\n")
                     manifestBuilder.append("SHA-256-Digest: $hash\r\n\r\n")
                 }

@@ -62,13 +62,6 @@ object ContainerStubRegistry {
 open class BaseContainerStubActivity : Activity() {
 
     private lateinit var storageContext: com.virtual.fs.ContainerStorageContext
-    private var currentWebView: WebView? = null
-    private var progressBar: ProgressBar? = null
-    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
-
-    companion object {
-        private const val FILE_CHOOSER_REQUEST_CODE = 2001
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,20 +75,10 @@ open class BaseContainerStubActivity : Activity() {
         val displayBadge = intent.getStringExtra("EXTRA_DISPLAY_BADGE") ?: "C-${String.format("%02d", profileId)}"
         val cardTitle = profileName?.takeIf { it.isNotEmpty() } ?: "$targetAppName ($displayBadge)"
 
-        // Multi-process WebView storage isolation: guarantees separate cookies, local storage, and caches
-        val processPad = String.format("%02d", ((profileId - 1) % 25) + 1)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
-                WebView.setDataDirectorySuffix("worker_$processPad")
-            } catch (_: Exception) {
-                // Suffix already initialized for this process
-            }
-        }
-
-        // Initialize dedicated virtualized storage context (files, db WAL, isolated prefs)
+        // Initialize dedicated virtualized storage context
         storageContext = com.virtual.fs.ContainerStorageContext(this, profileId, targetPackage)
 
-        // 1. Task Description for Android OS Recents Switcher (Distinct task window per clone)
+        // Task description for Android OS Recents Switcher
         val color = when (profileId % 6) {
             0 -> Color.parseColor("#1E88E5")
             1 -> Color.parseColor("#43A047")
@@ -120,91 +103,102 @@ open class BaseContainerStubActivity : Activity() {
             } catch (_: Exception) {}
         }
 
-        // 2. Build and set Live Sandboxed Container View
-        val targetUrl = resolveTargetUrl(targetPackage, targetAppName)
-        val rootView = buildSandboxedContainerView(profileId, targetPackage, targetAppName, displayBadge, cardTitle, targetUrl, processPad)
+        // Check if app is installed in a dual/work profile (User 12 Island / User 128 Twin)
+        var hasDualProfile = false
+        val launcherApps = getSystemService(Context.LAUNCHER_APPS_SERVICE) as? android.content.pm.LauncherApps
+        val userManager = getSystemService(Context.USER_SERVICE) as? android.os.UserManager
+        if (launcherApps != null && userManager != null) {
+            for (user in userManager.userProfiles) {
+                if (user != android.os.Process.myUserHandle()) {
+                    val acts = launcherApps.getActivityList(targetPackage, user)
+                    if (acts.isNotEmpty()) {
+                        hasDualProfile = true
+                        break
+                    }
+                }
+            }
+        }
+
+        // Build 100% Native Hub View (No web browsers)
+        val padId = String.format("%02d", profileId)
+        val rootView = buildNativeHubView(profileId, targetPackage, targetAppName, displayBadge, cardTitle, padId, hasDualProfile)
         setContentView(rootView)
     }
 
-    private fun resolveTargetUrl(targetPackage: String, targetAppName: String): String {
-        val pkg = targetPackage.lowercase()
-        val name = targetAppName.lowercase()
-
-        return when {
-            pkg.contains("facebook") || name.contains("facebook") -> "https://m.facebook.com"
-            pkg.contains("paypal") || name.contains("paypal") -> "https://www.paypal.com/signin"
-            pkg.contains("instagram") || name.contains("instagram") -> "https://www.instagram.com"
-            pkg.contains("twitter") || name.contains("twitter") || pkg.contains(".x") || name == "x" -> "https://x.com"
-            pkg.contains("telegram") || name.contains("telegram") -> "https://web.telegram.org"
-            pkg.contains("whatsapp") || name.contains("whatsapp") -> "https://web.whatsapp.com"
-            pkg.contains("reddit") || name.contains("reddit") -> "https://www.reddit.com"
-            pkg.contains("gmail") || pkg.contains(".gm") || name.contains("gmail") -> "https://mail.google.com"
-            pkg.contains("google") || name.contains("google") -> "https://accounts.google.com"
-            pkg.contains("amazon") || name.contains("amazon") -> "https://www.amazon.com"
-            pkg.contains("linkedin") || name.contains("linkedin") -> "https://www.linkedin.com"
-            pkg.contains("tiktok") || name.contains("tiktok") -> "https://www.tiktok.com"
-            pkg.contains("spotify") || name.contains("spotify") -> "https://open.spotify.com"
-            pkg.contains("netflix") || name.contains("netflix") -> "https://www.netflix.com"
-            pkg.contains("outlook") || name.contains("outlook") -> "https://outlook.live.com"
-            pkg.contains("discord") || name.contains("discord") -> "https://discord.com/login"
-            pkg.contains("pinterest") || name.contains("pinterest") -> "https://www.pinterest.com"
-            pkg.startsWith("http://") || pkg.startsWith("https://") -> targetPackage
-            else -> "https://www.google.com/search?q=${Uri.encode(targetAppName)}"
-        }
-    }
-
-    private fun buildSandboxedContainerView(
+    private fun buildNativeHubView(
         profileId: Int,
         targetPackage: String,
         targetAppName: String,
         displayBadge: String,
         cardTitle: String,
-        targetUrl: String,
-        processPad: String
+        padId: String,
+        hasDualProfile: Boolean
     ): View {
         val dp = resources.displayMetrics.density
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val scrollView = ScrollView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(Color.parseColor("#0A0E1A"))
+            isFillViewport = true
         }
 
-        // --- TOP NAVIGATION BAR ---
-        val topBar = LinearLayout(this).apply {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            setPadding((24 * dp).toInt(), (24 * dp).toInt(), (24 * dp).toInt(), (32 * dp).toInt())
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+
+        // Top Navigation / Header
+        val topNav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (56 * dp).toInt()
-            )
-            setBackgroundColor(Color.parseColor("#0F172A")) // Slate 900
-            setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
+                (48 * dp).toInt()
+            ).apply { bottomMargin = (16 * dp).toInt() }
         }
 
-        // Back / Close Button
         val backBtn = TextView(this).apply {
-            text = "‹"
-            textSize = 28f
-            setTextColor(Color.parseColor("#E2E8F0"))
-            setPadding((4 * dp).toInt(), 0, (12 * dp).toInt(), (4 * dp).toInt())
-            setOnClickListener {
-                if (currentWebView?.canGoBack() == true) {
-                    currentWebView?.goBack()
-                } else {
-                    finish()
-                }
+            text = "‹ Back"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 16f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
+            setOnClickListener { finish() }
+        }
+        topNav.addView(backBtn)
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        }
+        topNav.addView(spacer)
+
+        val badgeView = TextView(this).apply {
+            text = displayBadge
+            setTextColor(Color.parseColor("#00E5FF"))
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding((10 * dp).toInt(), (4 * dp).toInt(), (10 * dp).toInt(), (4 * dp).toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = 12 * dp
+                setColor(Color.parseColor("#1E293B"))
+                setStroke((1 * dp).toInt(), Color.parseColor("#00E5FF"))
             }
         }
-        topBar.addView(backBtn)
+        topNav.addView(badgeView)
+        container.addView(topNav)
 
         // App Icon
-        val appIconView = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams((32 * dp).toInt(), (32 * dp).toInt()).apply {
-                marginEnd = (10 * dp).toInt()
+        val iconView = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams((96 * dp).toInt(), (96 * dp).toInt()).apply {
+                bottomMargin = (16 * dp).toInt()
             }
             try {
                 setImageDrawable(packageManager.getApplicationIcon(targetPackage))
@@ -212,95 +206,203 @@ open class BaseContainerStubActivity : Activity() {
                 setImageResource(android.R.drawable.sym_def_app_icon)
             }
         }
-        topBar.addView(appIconView)
+        container.addView(iconView)
 
-        // Title Column
-        val titleCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val titleText = TextView(this).apply {
+        // Title
+        val titleView = TextView(this).apply {
             text = cardTitle
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 24f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
         }
-        val subtitleText = TextView(this).apply {
-            text = ":worker_$processPad • 100% Isolated Slot"
-            setTextColor(Color.parseColor("#38BDF8")) // Sky 400
-            textSize = 10f
-            typeface = android.graphics.Typeface.MONOSPACE
-        }
-        titleCol.addView(titleText)
-        titleCol.addView(subtitleText)
-        topBar.addView(titleCol)
+        container.addView(titleView)
 
-        // Check if Standalone Native APK is installed
-        val padId = String.format("%02d", profileId)
-        val standalonePkg = "$targetPackage.c$padId"
-        val standaloneIntent = packageManager.getLaunchIntentForPackage(standalonePkg)
-        if (standaloneIntent != null) {
-            val nativeBtn = TextView(this).apply {
-                text = "⚡ Native APK"
-                setTextColor(Color.parseColor("#10B981"))
-                textSize = 10f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setPadding((8 * dp).toInt(), (4 * dp).toInt(), (8 * dp).toInt(), (4 * dp).toInt())
-                background = GradientDrawable().apply {
-                    cornerRadius = 8 * dp
-                    setColor(Color.parseColor("#064E3B"))
-                    setStroke((1 * dp).toInt(), Color.parseColor("#10B981"))
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = (6 * dp).toInt() }
-                setOnClickListener {
-                    standaloneIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(standaloneIntent)
-                }
-            }
-            topBar.addView(nativeBtn)
-        }
-
-        // Slot Badge Pill
-        val badgePill = TextView(this).apply {
-            text = displayBadge
-            setTextColor(Color.parseColor("#00E5FF"))
-            textSize = 11f
+        // Subtitle
+        val subtitleView = TextView(this).apply {
+            text = "100% Real Native Android Application"
+            setTextColor(Color.parseColor("#10B981"))
+            textSize = 13f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding((8 * dp).toInt(), (3 * dp).toInt(), (8 * dp).toInt(), (3 * dp).toInt())
-            background = GradientDrawable().apply {
-                cornerRadius = 12 * dp
-                setColor(Color.parseColor("#1E293B"))
-                setStroke((1 * dp).toInt(), Color.parseColor("#00E5FF"))
-            }
+            gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = (8 * dp).toInt() }
-        }
-        topBar.addView(badgePill)
-
-        // Reload Action
-        val reloadBtn = TextView(this).apply {
-            text = "↻"
-            textSize = 20f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding((6 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt(), (4 * dp).toInt())
-            setOnClickListener {
-                currentWebView?.reload()
+            ).apply {
+                topMargin = (4 * dp).toInt()
+                bottomMargin = (20 * dp).toInt()
             }
         }
-        topBar.addView(reloadBtn)
+        container.addView(subtitleView)
 
-        // Pin to Home Screen Action
-        val pinBtn = TextView(this).apply {
-            text = "📌"
-            textSize = 16f
-            setPadding((6 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt(), (4 * dp).toInt())
+        // Info Card
+        val infoCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (24 * dp).toInt() }
+            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = 14 * dp
+                setColor(Color.parseColor("#131D31"))
+                setStroke((1 * dp).toInt(), Color.parseColor("#1E293B"))
+            }
+        }
+
+        val standalonePkg = "$targetPackage.c$padId"
+        val isStandaloneInstalled = packageManager.getLaunchIntentForPackage(standalonePkg) != null
+
+        addHubRow(infoCard, "Original Package", targetPackage, "#94A3B8", dp)
+        addHubRow(infoCard, "Cloned Package", standalonePkg, "#38BDF8", dp)
+        addHubRow(infoCard, "Dual Profile Space", if (hasDualProfile) "ACTIVE (User 12)" else "Available", if (hasDualProfile) "#10B981" else "#F59E0B", dp)
+        addHubRow(infoCard, "Standalone Install", if (isStandaloneInstalled) "INSTALLED" else "Ready to Install", if (isStandaloneInstalled) "#10B981" else "#E2E8F0", dp)
+        addHubRow(infoCard, "Engine Mode", "Native Android (Zero Web Pages)", "#A855F7", dp)
+        container.addView(infoCard)
+
+        // PRIMARY ACTION 1: Launch Dual Profile Instance (If active)
+        if (hasDualProfile) {
+            val dualBtn = Button(this).apply {
+                text = "⚡ Launch Dual Native App (Account 2)"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (52 * dp).toInt()
+                ).apply { bottomMargin = (12 * dp).toInt() }
+                background = GradientDrawable().apply {
+                    cornerRadius = 12 * dp
+                    setColor(Color.parseColor("#059669")) // Emerald 600
+                }
+                setOnClickListener {
+                    val lApps = getSystemService(Context.LAUNCHER_APPS_SERVICE) as? android.content.pm.LauncherApps
+                    val uMgr = getSystemService(Context.USER_SERVICE) as? android.os.UserManager
+                    if (lApps != null && uMgr != null) {
+                        for (user in uMgr.userProfiles) {
+                            if (user != android.os.Process.myUserHandle()) {
+                                val acts = lApps.getActivityList(targetPackage, user)
+                                if (acts.isNotEmpty()) {
+                                    lApps.startMainActivity(acts[0].componentName, user, null, null)
+                                    finish()
+                                    return@setOnClickListener
+                                }
+                            }
+                        }
+                    }
+                    Toast.makeText(this@BaseContainerStubActivity, "Launching dual app...", Toast.LENGTH_SHORT).show()
+                }
+            }
+            container.addView(dualBtn)
+        }
+
+        // PRIMARY ACTION 2: Launch or Install Standalone Native App
+        if (isStandaloneInstalled) {
+            val launchStandaloneBtn = Button(this).apply {
+                text = "🚀 Launch Standalone App ($displayBadge)"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (52 * dp).toInt()
+                ).apply { bottomMargin = (12 * dp).toInt() }
+                background = GradientDrawable().apply {
+                    cornerRadius = 12 * dp
+                    setColor(Color.parseColor("#6366F1")) // Indigo 500
+                }
+                setOnClickListener {
+                    val intent = packageManager.getLaunchIntentForPackage(standalonePkg)
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        finish()
+                    }
+                }
+            }
+            container.addView(launchStandaloneBtn)
+        } else {
+            val installBtn = Button(this).apply {
+                text = "📦 Install 2nd Native App on Device"
+                setTextColor(Color.parseColor("#0A0E1A"))
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (52 * dp).toInt()
+                ).apply { bottomMargin = (12 * dp).toInt() }
+                background = GradientDrawable().apply {
+                    cornerRadius = 12 * dp
+                    setColor(Color.parseColor("#00E5FF")) // Neon Cyan
+                }
+                setOnClickListener {
+                    Toast.makeText(this@BaseContainerStubActivity, "Packaging $targetAppName with native C++ libraries...", Toast.LENGTH_SHORT).show()
+                    Thread {
+                        val apk = com.virtual.engine.apk.StandaloneApkGenerator.prepareClonedApkFile(
+                            context = this@BaseContainerStubActivity,
+                            cloneId = profileId,
+                            targetPackage = targetPackage,
+                            targetAppName = targetAppName,
+                            displayBadge = displayBadge
+                        )
+                        runOnUiThread {
+                            if (apk != null && apk.exists()) {
+                                com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(this@BaseContainerStubActivity, apk)
+                            } else {
+                                Toast.makeText(this@BaseContainerStubActivity, "Failed preparing APK package.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.start()
+                }
+            }
+            container.addView(installBtn)
+        }
+
+        // ACTION 3: Launch Original App (Account 1)
+        val origBtn = Button(this).apply {
+            text = "📱 Open Original $targetAppName (Account 1)"
+            setTextColor(Color.parseColor("#E2E8F0"))
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (48 * dp).toInt()
+            ).apply { bottomMargin = (12 * dp).toInt() }
+            background = GradientDrawable().apply {
+                cornerRadius = 12 * dp
+                setColor(Color.parseColor("#1E293B"))
+                setStroke((1 * dp).toInt(), Color.parseColor("#334155"))
+            }
+            setOnClickListener {
+                try {
+                    val intent = packageManager.getLaunchIntentForPackage(targetPackage)
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                    } else {
+                        Toast.makeText(this@BaseContainerStubActivity, "Original app not installed.", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this@BaseContainerStubActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        container.addView(origBtn)
+
+        // ACTION 4: Pin to Phone Desktop
+        val pinBtn = Button(this).apply {
+            text = "📌 Pin Shortcut to Phone Home Screen"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (46 * dp).toInt()
+            )
+            background = GradientDrawable().apply {
+                cornerRadius = 12 * dp
+                setColor(Color.parseColor("#0F172A"))
+                setStroke((1 * dp).toInt(), Color.parseColor("#1E293B"))
+            }
             setOnClickListener {
                 val ok = com.virtual.ui.ShortcutHelper.pinCloneShortcutToPhoneHomeScreen(
                     context = this@BaseContainerStubActivity,
@@ -310,185 +412,46 @@ open class BaseContainerStubActivity : Activity() {
                     isSingleTask = true
                 )
                 if (ok) {
-                    Toast.makeText(this@BaseContainerStubActivity, "Desktop shortcut request sent for $cardTitle!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@BaseContainerStubActivity, "Shortcut created for $cardTitle!", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(this@BaseContainerStubActivity, "Pin requested (check phone home screen)", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@BaseContainerStubActivity, "Home screen pin request sent", Toast.LENGTH_SHORT).show()
                 }
             }
         }
-        topBar.addView(pinBtn)
+        container.addView(pinBtn)
 
-        // Clear Session (Reset this clone slot only) Action
-        val clearBtn = TextView(this).apply {
-            text = "🗑"
-            textSize = 16f
-            setPadding((6 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt(), (4 * dp).toInt())
-            setOnClickListener {
-                AlertDialog.Builder(this@BaseContainerStubActivity)
-                    .setTitle("Reset Clone Slot $profileId?")
-                    .setMessage("This will clear cookies and session data for ONLY this clone slot ($cardTitle).\n\nAll your other clone slots and accounts will stay completely logged in.")
-                    .setPositiveButton("Reset Slot") { _, _ ->
-                        CookieManager.getInstance().removeAllCookies {
-                            WebStorage.getInstance().deleteAllData()
-                            currentWebView?.clearCache(true)
-                            currentWebView?.loadUrl(targetUrl)
-                            Toast.makeText(this@BaseContainerStubActivity, "Slot $profileId session reset!", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        }
-        topBar.addView(clearBtn)
+        scrollView.addView(container)
+        return scrollView
+    }
 
-        root.addView(topBar)
-
-        // Progress Bar
-        val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+    private fun addHubRow(parent: LinearLayout, label: String, value: String, valueColor: String, dp: Float) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (3 * dp).toInt()
-            )
-            max = 100
-            progress = 0
-            visibility = View.VISIBLE
-        }
-        progressBar = pb
-        root.addView(pb)
-
-        // Content Frame with WebView
-        val contentFrame = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        }
-
-        val webView = WebView(this).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(Color.parseColor("#0A0E1A"))
-            isFocusable = true
-            isFocusableInTouchMode = true
-        }
-        currentWebView = webView
-
-        // Configure high-performance sandboxed web settings
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            setSupportZoom(true)
-            builtInZoomControls = true
-            displayZoomControls = false
-            allowFileAccess = true
-            allowContentAccess = true
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            cacheMode = WebSettings.LOAD_DEFAULT
-            userAgentString = "Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-        }
-
-        // Enable Cookies with third-party support
-        val cookieManager = CookieManager.getInstance()
-        cookieManager.setAcceptCookie(true)
-        cookieManager.setAcceptThirdPartyCookies(webView, true)
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return false
-                if (url.startsWith("http://") || url.startsWith("https://")) {
-                    return false // Keep inside sandboxed isolated container
-                }
-                // Handle external apps (tel:, mailto:, etc.)
-                return try {
-                    val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                    startActivity(intent)
-                    true
-                } catch (_: Exception) {
-                    true
-                }
-            }
-
-            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                progressBar?.visibility = View.VISIBLE
-            }
-
-            override fun onPageFinished(view: WebView?, url: String?) {
-                progressBar?.visibility = View.GONE
-                CookieManager.getInstance().flush()
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (5 * dp).toInt()
+                bottomMargin = (5 * dp).toInt()
             }
         }
-
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                progressBar?.progress = newProgress
-                if (newProgress >= 100) {
-                    progressBar?.visibility = View.GONE
-                }
-            }
-
-            override fun onShowFileChooser(
-                webView: WebView?,
-                filePathCallback: ValueCallback<Array<Uri>>?,
-                fileChooserParams: FileChooserParams?
-            ): Boolean {
-                this@BaseContainerStubActivity.fileChooserCallback?.onReceiveValue(null)
-                this@BaseContainerStubActivity.fileChooserCallback = filePathCallback
-
-                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "*/*"
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                }
-
-                return try {
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
-                    true
-                } catch (_: Exception) {
-                    this@BaseContainerStubActivity.fileChooserCallback = null
-                    false
-                }
-            }
+        val labelView = TextView(this).apply {
+            text = label
+            setTextColor(Color.parseColor("#64748B"))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
         }
-
-        contentFrame.addView(webView)
-        root.addView(contentFrame)
-
-        // Load the isolated service URL
-        webView.loadUrl(targetUrl)
-
-        return root
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-            val result = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
-            fileChooserCallback?.onReceiveValue(result)
-            fileChooserCallback = null
+        val valueView = TextView(this).apply {
+            text = value
+            setTextColor(Color.parseColor(valueColor))
+            textSize = 12f
+            gravity = Gravity.END
+            typeface = android.graphics.Typeface.MONOSPACE
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.8f)
         }
-    }
-
-    override fun onBackPressed() {
-        val webView = currentWebView
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
-        }
-    }
-
-    override fun onDestroy() {
-        currentWebView?.let { wv ->
-            wv.stopLoading()
-            (wv.parent as? ViewGroup)?.removeView(wv)
-            wv.destroy()
-        }
-        currentWebView = null
-        super.onDestroy()
+        row.addView(labelView)
+        row.addView(valueView)
+        parent.addView(row)
     }
 }
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
+import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.UserManager
 import android.provider.Settings
 import android.util.Base64
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -379,10 +381,10 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             postProgress(2, "Binding ContainerStorageContext & IsolatedSharedPreferences...")
             Thread.sleep(150)
 
-            postProgress(3, "Setting WebView multi-process process suffix worker_$padId...")
+            postProgress(3, "Configuring native sandbox vault :worker_$padId...")
             Thread.sleep(150)
 
-            postProgress(4, "Virtual Sandbox #$assignedId active with isolated data vault!")
+            postProgress(4, "Native Sandbox #$assignedId active with isolated data vault!")
         }
 
         val newRecord = JSONObject().apply {
@@ -498,34 +500,50 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         val padId = String.format("%02d", cloneId)
         val standalonePkg = "$targetPkg.c$padId"
 
-        // If standalone clone and installed on device, launch directly
-        if (mode == "standalone") {
-            try {
-                val launchIntent = context.packageManager.getLaunchIntentForPackage(standalonePkg)
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(launchIntent)
-                    return
-                }
-            } catch (_: Exception) {}
-        }
+        // 1. Priority: If standalone cloned APK is installed on device (e.g. com.pathao.user.c01), launch native app directly
+        try {
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(standalonePkg)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                return
+            }
+        } catch (_: Exception) {}
 
+        // 2. Priority: If app is installed in a Work / Dual / Island Profile (e.g. User 12 or 128), launch real native dual app
+        try {
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+            val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
+            if (launcherApps != null && userManager != null) {
+                for (user in userManager.userProfiles) {
+                    if (user != android.os.Process.myUserHandle()) {
+                        val acts = launcherApps.getActivityList(targetPkg, user)
+                        if (acts.isNotEmpty()) {
+                            launcherApps.startMainActivity(acts[0].componentName, user, null, null)
+                            return
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 3. Fallback: Launch Native Hub where user can install standalone APK or launch original app
         val stubClassName = getStubActivityClass(cloneId, isSingleTask)
 
-        val intent = Intent()
-        intent.component = ComponentName(context.packageName, stubClassName)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                Intent.FLAG_ACTIVITY_NEW_DOCUMENT
-
-        intent.putExtra("com.virtual.EXTRA_PROFILE_ID", cloneId)
-        intent.putExtra("com.virtual.EXTRA_TARGET_PACKAGE", targetPkg)
-        intent.putExtra("EXTRA_PROFILE_ID", cloneId)
-        intent.putExtra("EXTRA_PROFILE_NAME", displayName)
-        intent.putExtra("EXTRA_TARGET_PKG", targetPkg)
-        intent.putExtra("EXTRA_TARGET_APP_NAME", displayName ?: targetPkg)
-        intent.putExtra("EXTRA_DISPLAY_BADGE", "C-$padId")
-        intent.putExtra("EXTRA_CLONE_MODE", mode)
+        val intent = Intent().apply {
+            component = ComponentName(context.packageName, stubClassName)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                    Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            putExtra("com.virtual.EXTRA_PROFILE_ID", cloneId)
+            putExtra("com.virtual.EXTRA_TARGET_PACKAGE", targetPkg)
+            putExtra("EXTRA_PROFILE_ID", cloneId)
+            putExtra("EXTRA_PROFILE_NAME", displayName)
+            putExtra("EXTRA_TARGET_PKG", targetPkg)
+            putExtra("EXTRA_TARGET_APP_NAME", displayName ?: targetPkg)
+            putExtra("EXTRA_DISPLAY_BADGE", "C-$padId")
+            putExtra("EXTRA_CLONE_MODE", mode)
+        }
 
         context.startActivity(intent)
     }
