@@ -85,6 +85,14 @@
 
 ---
 
-*Last Updated: October 2026 — Session 2 (Profile Label UX completion)*  
+## 🌐 Remote Repository & Source Control
+- **GitHub Repository**: [Bibekbvk/app-to-clone](https://github.com/Bibekbvk/app-to-clone)
+- **Active Branch**: `master` (tracked to `origin/master`)
+- **Status**: Clean working tree, fully pushed & synchronized
+
+---
+
+*Last Updated: October 2026 — Session 3 (GitHub repository setup & code sync)*  
 *Maintainer: Antigravity AI Engineering Team*
+
 
