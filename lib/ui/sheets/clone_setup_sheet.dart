@@ -31,6 +31,8 @@ class _CloneSetupSheetState extends ConsumerState<CloneSetupSheet> {
   bool _isCreating = false;
   DevicePreset? _selectedPreset; // null means 'Auto-Randomize (Flagships)'
   late String _customAndroidId;
+  late String _customImei;
+  late String _customMac;
   final TextEditingController _profileLabelController = TextEditingController();
 
   static const List<String> _profileSuggestions = [
@@ -41,6 +43,8 @@ class _CloneSetupSheetState extends ConsumerState<CloneSetupSheet> {
   void initState() {
     super.initState();
     _customAndroidId = DevicePreset.generateRandomAndroidId();
+    _customImei = DevicePreset.generateRandomImei();
+    _customMac = DevicePreset.generateRandomMac();
   }
 
   @override
@@ -49,9 +53,11 @@ class _CloneSetupSheetState extends ConsumerState<CloneSetupSheet> {
     super.dispose();
   }
 
-  void _regenerateAndroidId() {
+  void _regenerateIdentifiers() {
     setState(() {
       _customAndroidId = DevicePreset.generateRandomAndroidId();
+      _customImei = DevicePreset.generateRandomImei();
+      _customMac = DevicePreset.generateRandomMac();
     });
   }
 
@@ -693,7 +699,7 @@ class _CloneSetupSheetState extends ConsumerState<CloneSetupSheet> {
                                       child: InkWell(
                                         key: const ValueKey('reroll_android_id_button'),
                                         borderRadius: BorderRadius.circular(8),
-                                        onTap: _regenerateAndroidId,
+                                        onTap: _regenerateIdentifiers,
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
@@ -724,6 +730,38 @@ class _CloneSetupSheetState extends ConsumerState<CloneSetupSheet> {
                                   ],
                                 ],
                               ),
+                              if (_count == 1) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.sim_card_rounded, size: 13, color: Color(0xFF3B82F6)),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        'IMEI: $_customImei',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontFamily: 'monospace',
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Icon(Icons.wifi_rounded, size: 13, color: Color(0xFFF59E0B)),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'MAC: ${_customMac.length > 11 ? _customMac.substring(0, 11) : _customMac}..',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontFamily: 'monospace',
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),

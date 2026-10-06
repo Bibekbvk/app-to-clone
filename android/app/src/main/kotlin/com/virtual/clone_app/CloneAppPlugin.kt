@@ -440,6 +440,8 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             put("deviceModel", identityProfile.displayName)
             put("androidId", identityProfile.androidId)
             put("advertisingId", identityProfile.advertisingId)
+            put("imei", identityProfile.imei)
+            put("macAddress", identityProfile.macAddress)
             put("createdAt", System.currentTimeMillis())
         }
 
@@ -681,6 +683,8 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     "deviceModel" to obj.optString("deviceModel").takeIf { it.isNotEmpty() },
                     "androidId" to obj.optString("androidId").takeIf { it.isNotEmpty() },
                     "advertisingId" to obj.optString("advertisingId").takeIf { it.isNotEmpty() },
+                    "imei" to obj.optString("imei").takeIf { it.isNotEmpty() },
+                    "macAddress" to obj.optString("macAddress").takeIf { it.isNotEmpty() },
                     "isInstalled" to isInstalled,
                     "createdAt" to obj.optLong("createdAt", System.currentTimeMillis())
                 )

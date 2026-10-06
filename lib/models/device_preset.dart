@@ -95,4 +95,39 @@ class DevicePreset {
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
   }
+
+  /// Generates a valid 15-digit 3GPP IMEI with Luhn checksum digit.
+  static String generateRandomImei([String tac = '35848231']) {
+    final random = Random.secure();
+    final cleanTac = tac.replaceAll(RegExp(r'\D'), '').padRight(8, '0').substring(0, 8);
+    final snr = List.generate(6, (_) => random.nextInt(10)).join();
+    final body = '$cleanTac$snr';
+    var sum = 0;
+    for (var i = 0; i < body.length; i++) {
+      var d = int.parse(body[i]);
+      if (i % 2 == 1) {
+        d *= 2;
+        if (d > 9) d = (d ~/ 10) + (d % 10);
+      }
+      sum += d;
+    }
+    final checkDigit = (10 - (sum % 10)) % 10;
+    return '$body$checkDigit';
+  }
+
+  /// Generates a synthetic 15-digit IMSI (MCC 310 + MNC 260 + 9-digit MSIN).
+  static String generateRandomImsi() {
+    final random = Random.secure();
+    final msin = List.generate(9, (_) => random.nextInt(10)).join();
+    return '310260$msin';
+  }
+
+  /// Generates a synthetic locally administered unicast Wi-Fi MAC address.
+  static String generateRandomMac() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(6, (_) => random.nextInt(256));
+    bytes[0] = (bytes[0] & 0xFE) | 0x02; // Locally administered, unicast
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+  }
 }
+

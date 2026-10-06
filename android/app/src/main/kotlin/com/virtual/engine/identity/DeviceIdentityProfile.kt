@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import com.virtual.engine.hook.VirtualServiceManagerHook
 import org.json.JSONObject
 import java.lang.reflect.Field
 import java.lang.reflect.Modifier
@@ -12,8 +13,9 @@ import java.security.SecureRandom
 /**
  * Hardware Identity & Device Profile Virtualization.
  * Provides presets for major Android flagships (Galaxy S24, Pixel 8, Xiaomi 14, OnePlus 12),
- * mutates android.os.Build static properties via Java reflection, and intercepts
- * Settings.Secure.ANDROID_ID via private sNameValueCache injection.
+ * mutates android.os.Build static properties via Java reflection, intercepts
+ * Settings.Secure.ANDROID_ID via private sNameValueCache injection, and installs
+ * ServiceManager.sCache hooks for Telephony (IMEI/IMSI), Wi-Fi (MAC), and Location (Fake GPS).
  */
 data class DeviceIdentityProfile(
     val presetId: String,
@@ -30,7 +32,15 @@ data class DeviceIdentityProfile(
     val advertisingId: String,
     val serial: String = "R58M" + androidId.takeLast(7).uppercase(),
     val display: String = "UP1A.231005.007." + model.replace(" ", ""),
-    val buildId: String = "UP1A.231005.007"
+    val buildId: String = "UP1A.231005.007",
+    val imei: String = generateImei("35848231", androidId.hashCode()),
+    val imsi: String = generateImsi(androidId.hashCode()),
+    val macAddress: String = generateSpoofedMac(androidId),
+    val simSerial: String = "89014103" + generateRandomDigits(12, androidId.hashCode() + 20),
+    val networkOperator: String = "T-Mobile US",
+    val phoneNumber: String = "+12025550" + String.format("%03d", Math.abs(androidId.hashCode() % 1000)),
+    val fakeLatitude: Double? = null,
+    val fakeLongitude: Double? = null
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -49,6 +59,14 @@ data class DeviceIdentityProfile(
             put("serial", serial)
             put("display", display)
             put("buildId", buildId)
+            put("imei", imei)
+            put("imsi", imsi)
+            put("macAddress", macAddress)
+            put("simSerial", simSerial)
+            put("networkOperator", networkOperator)
+            put("phoneNumber", phoneNumber)
+            if (fakeLatitude != null) put("fakeLatitude", fakeLatitude)
+            if (fakeLongitude != null) put("fakeLongitude", fakeLongitude)
         }
     }
 
@@ -70,7 +88,13 @@ data class DeviceIdentityProfile(
             advertisingId = "3fa85f64-5717-4562-b3fc-2c963f66afa6",
             serial = "R58M80ABCDE",
             display = "UP1A.231005.007.S928BXXU1AXB5",
-            buildId = "UP1A.231005.007"
+            buildId = "UP1A.231005.007",
+            imei = "358482319082736",
+            imsi = "310260192837465",
+            macAddress = "02:44:8a:1b:2c:3d",
+            simSerial = "89014103211118510720",
+            networkOperator = "T-Mobile US",
+            phoneNumber = "+12025550192"
         )
 
         val PRESET_PIXEL_8 = DeviceIdentityProfile(
@@ -88,7 +112,13 @@ data class DeviceIdentityProfile(
             advertisingId = "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
             serial = "37251FDH2000XW",
             display = "UD1A.230803.041",
-            buildId = "UD1A.230803.041"
+            buildId = "UD1A.230803.041",
+            imei = "357123118940284",
+            imsi = "310410982374651",
+            macAddress = "02:44:9c:2d:3e:4f",
+            simSerial = "89012608491823746192",
+            networkOperator = "Verizon Wireless",
+            phoneNumber = "+12025550184"
         )
 
         val PRESET_XIAOMI_14 = DeviceIdentityProfile(
@@ -106,7 +136,13 @@ data class DeviceIdentityProfile(
             advertisingId = "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             serial = "23116P00192847",
             display = "UKQ1.230804.001",
-            buildId = "UKQ1.230804.001"
+            buildId = "UKQ1.230804.001",
+            imei = "865432067812934",
+            imsi = "460001827364519",
+            macAddress = "02:44:ad:3e:4f:5a",
+            simSerial = "89860018273645192837",
+            networkOperator = "China Mobile",
+            phoneNumber = "+12025550143"
         )
 
         val PRESET_ONEPLUS_12 = DeviceIdentityProfile(
@@ -124,7 +160,13 @@ data class DeviceIdentityProfile(
             advertisingId = "c81d4e2e-bcf2-11e6-869b-7df92533d2db",
             serial = "CPH2581908273",
             display = "CPH2581_14.0.0.404(EX01)",
-            buildId = "UKQ1.230924.001"
+            buildId = "UKQ1.230924.001",
+            imei = "869876061928374",
+            imsi = "310260481928374",
+            macAddress = "02:44:be:4f:5a:6b",
+            simSerial = "89014103827162534120",
+            networkOperator = "T-Mobile US",
+            phoneNumber = "+12025550172"
         )
 
         fun fromJson(json: JSONObject): DeviceIdentityProfile {
@@ -152,21 +194,34 @@ data class DeviceIdentityProfile(
                 advertisingId = json.optString("advertisingId", base.advertisingId),
                 serial = json.optString("serial", base.serial),
                 display = json.optString("display", base.display),
-                buildId = json.optString("buildId", base.buildId)
+                buildId = json.optString("buildId", base.buildId),
+                imei = json.optString("imei", base.imei),
+                imsi = json.optString("imsi", base.imsi),
+                macAddress = json.optString("macAddress", base.macAddress),
+                simSerial = json.optString("simSerial", base.simSerial),
+                networkOperator = json.optString("networkOperator", base.networkOperator),
+                phoneNumber = json.optString("phoneNumber", base.phoneNumber),
+                fakeLatitude = if (json.has("fakeLatitude")) json.optDouble("fakeLatitude") else null,
+                fakeLongitude = if (json.has("fakeLongitude")) json.optDouble("fakeLongitude") else null
             )
         }
 
         /**
          * Resolves or dynamically generates a unique identity profile for a clone instance.
          */
-        fun getProfileForClone(cloneId: Int, preferredPreset: String? = null, customAndroidId: String? = null): DeviceIdentityProfile {
+        fun getProfileForClone(
+            cloneId: Int,
+            preferredPreset: String? = null,
+            customAndroidId: String? = null,
+            customImei: String? = null,
+            customMac: String? = null
+        ): DeviceIdentityProfile {
             val base = when (preferredPreset?.lowercase()) {
                 "samsung_s24_ultra", "samsung", "galaxy" -> PRESET_SAMSUNG_S24
                 "pixel_8_pro", "pixel", "google" -> PRESET_PIXEL_8
                 "xiaomi_14_pro", "xiaomi" -> PRESET_XIAOMI_14
                 "oneplus_12", "oneplus" -> PRESET_ONEPLUS_12
                 else -> {
-                    // Rotate through flagship profiles based on clone ID
                     when (cloneId % 4) {
                         1 -> PRESET_SAMSUNG_S24
                         2 -> PRESET_PIXEL_8
@@ -177,7 +232,6 @@ data class DeviceIdentityProfile(
             }
 
             val randomAndroidId = customAndroidId?.takeIf { it.isNotBlank() } ?: run {
-                // Always generate a fresh cryptographically unique Android ID even for same cloneId
                 val rnd = SecureRandom()
                 val bytes = ByteArray(8)
                 rnd.nextBytes(bytes)
@@ -185,17 +239,55 @@ data class DeviceIdentityProfile(
             }
             val randomGaid = generateRandomUuid(cloneId)
             val randomSerial = "CL" + generateRandomHex(10, cloneId + 50).uppercase()
+            val resolvedImei = customImei?.takeIf { it.isNotBlank() } ?: generateImei(base.imei.take(8), randomAndroidId.hashCode())
+            val resolvedMac = customMac?.takeIf { it.isNotBlank() } ?: generateSpoofedMac(randomAndroidId)
+            val resolvedImsi = generateImsi(randomAndroidId.hashCode())
+            val resolvedSimSerial = "89014103" + generateRandomDigits(12, randomAndroidId.hashCode() + 20)
 
             return base.copy(
                 androidId = randomAndroidId,
                 advertisingId = randomGaid,
-                serial = randomSerial
+                serial = randomSerial,
+                imei = resolvedImei,
+                imsi = resolvedImsi,
+                macAddress = resolvedMac,
+                simSerial = resolvedSimSerial
             )
+        }
+
+        fun generateImei(tac: String, seed: Int): String {
+            val cleanTac = tac.filter { it.isDigit() }.padEnd(8, '0').take(8)
+            val snr = generateRandomDigits(6, seed)
+            val body = cleanTac + snr
+            var sum = 0
+            for (i in body.indices) {
+                var d = body[i] - '0'
+                if (i % 2 == 1) {
+                    d *= 2
+                    if (d > 9) d = (d / 10) + (d % 10)
+                }
+                sum += d
+            }
+            val checkDigit = (10 - (sum % 10)) % 10
+            return body + checkDigit
+        }
+
+        fun generateImsi(seed: Int): String {
+            return "310260" + generateRandomDigits(9, seed + 42)
+        }
+
+        fun generateRandomDigits(length: Int, seed: Int): String {
+            val rnd = SecureRandom()
+            rnd.setSeed((seed.toLong() xor System.nanoTime()))
+            val sb = StringBuilder(length)
+            for (i in 0 until length) {
+                sb.append(rnd.nextInt(10))
+            }
+            return sb.toString()
         }
 
         private fun generateRandomHex(length: Int, seed: Int): String {
             val chars = "0123456789abcdef"
-            // Use true cryptographic entropy + seed as additional XOR salt for reproducibility per-clone
             val rnd = SecureRandom()
             val saltedSeed = seed.toLong() xor System.nanoTime()
             rnd.setSeed(saltedSeed)
@@ -253,9 +345,6 @@ data class DeviceIdentityProfile(
         /**
          * Injects the spoofed Android ID into android.provider.Settings$Secure, System, and Global
          * internal in-memory cache (sNameValueCache.mValues).
-         *
-         * This intercepts all calls to Settings.Secure.getString(resolver, Settings.Secure.ANDROID_ID)
-         * without modifying final methods on ContentResolver.
          */
         fun spoofSettingsSecure(androidId: String, advertisingId: String? = null) {
             val classesToHook = listOf(
@@ -270,7 +359,6 @@ data class DeviceIdentityProfile(
                     val cacheField = settingsClazz.getDeclaredField("sNameValueCache").apply { isAccessible = true }
                     val cacheObj = cacheField.get(null) ?: continue
 
-                    // In AOSP NameValueCache: private final ArrayMap<String, String> mValues
                     var valuesMap: MutableMap<String, String>? = null
                     try {
                         val mValuesField = cacheObj.javaClass.getDeclaredField("mValues").apply { isAccessible = true }
@@ -298,11 +386,14 @@ data class DeviceIdentityProfile(
 
         /**
          * Comprehensive identity isolation entry point:
-         * Spoofs both hardware Build properties and system settings identifiers.
+         * 1. Spoofs hardware Build properties.
+         * 2. Injects system settings identifiers (ANDROID_ID, GAID).
+         * 3. Installs ServiceManager.sCache proxies for Telephony (IMEI/IMSI), Wi-Fi (MAC), and Location (Fake GPS).
          */
         fun applyFullIdentity(profile: DeviceIdentityProfile) {
             applyToRuntime(profile)
             spoofSettingsSecure(profile.androidId, profile.advertisingId)
+            VirtualServiceManagerHook.install(profile)
         }
 
         private fun setField(clazz: Class<*>, fieldName: String, value: Any) {
@@ -310,7 +401,6 @@ data class DeviceIdentityProfile(
                 val field: Field = clazz.getDeclaredField(fieldName)
                 field.isAccessible = true
 
-                // Strip final modifier if accessible
                 try {
                     val modifiersField = Field::class.java.getDeclaredField("accessFlags")
                     modifiersField.isAccessible = true

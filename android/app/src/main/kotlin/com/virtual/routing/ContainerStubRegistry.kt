@@ -77,12 +77,16 @@ open class BaseContainerStubActivity : Activity() {
         val cloneMode = intent.getStringExtra("EXTRA_CLONE_MODE") ?: "standalone"
         val customAndroidId = intent.getStringExtra("EXTRA_ANDROID_ID")
         val devicePreset = intent.getStringExtra("EXTRA_DEVICE_PRESET")
+        val customImei = intent.getStringExtra("EXTRA_IMEI")
+        val customMac = intent.getStringExtra("EXTRA_MAC_ADDRESS")
 
         // Enforce full hardware & settings identity isolation immediately
         val identityProfile = com.virtual.engine.identity.DeviceIdentityProfile.getProfileForClone(
             cloneId = profileId,
             preferredPreset = devicePreset,
-            customAndroidId = customAndroidId
+            customAndroidId = customAndroidId,
+            customImei = customImei,
+            customMac = customMac
         )
         com.virtual.engine.identity.DeviceIdentityProfile.applyFullIdentity(identityProfile)
 

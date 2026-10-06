@@ -18,6 +18,8 @@ class CloneInfo {
   final String? deviceModel;
   final String? androidId;
   final String? advertisingId;
+  final String? imei;
+  final String? macAddress;
 
   CloneInfo({
     required this.id,
@@ -32,6 +34,8 @@ class CloneInfo {
     this.deviceModel,
     this.androidId,
     this.advertisingId,
+    this.imei,
+    this.macAddress,
   }) : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
 
   /// Returns the display name or falls back to the package name.
@@ -58,6 +62,8 @@ class CloneInfo {
       'deviceModel': deviceModel,
       'androidId': androidId,
       'advertisingId': advertisingId,
+      'imei': imei,
+      'macAddress': macAddress,
     };
   }
 
@@ -75,6 +81,8 @@ class CloneInfo {
       deviceModel: map['deviceModel'] as String?,
       androidId: map['androidId'] as String?,
       advertisingId: map['advertisingId'] as String?,
+      imei: map['imei'] as String?,
+      macAddress: map['macAddress'] as String?,
     );
   }
 
@@ -96,6 +104,8 @@ class CloneInfo {
     String? deviceModel,
     String? androidId,
     String? advertisingId,
+    String? imei,
+    String? macAddress,
   }) {
     return CloneInfo(
       id: id ?? this.id,
@@ -110,6 +120,8 @@ class CloneInfo {
       deviceModel: deviceModel ?? this.deviceModel,
       androidId: androidId ?? this.androidId,
       advertisingId: advertisingId ?? this.advertisingId,
+      imei: imei ?? this.imei,
+      macAddress: macAddress ?? this.macAddress,
     );
   }
 

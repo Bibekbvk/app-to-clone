@@ -65,6 +65,13 @@
 - [x] **Hardware Build Spoofing**: Java reflection overrides `android.os.Build` properties (`MANUFACTURER`, `BRAND`, `MODEL`, `DEVICE`, `PRODUCT`, `BOARD`, `HARDWARE`, `FINGERPRINT`, `SERIAL`, `DISPLAY`, `ID`, `USER`).
 - [x] **Launch Routing Separation**: Cleanly branches `executeLaunchClone` between standalone APK launch and instant stub activity launch.
 - [x] **Profile Identity Persistence**: `profileLabel` and `advertisingId` saved to `clone_identity.json` and `virtual_clone_registry_prefs` per clone slot. Surfaced in Flutter via `CloneInfo.profileLabel` & `CloneInfo.advertisingId`.
+- [x] **SZPY / BOOSTIFLY Virtualization Engine Parity**:
+  - [x] **Hidden API Unseal Bypass**: `HiddenApiBypass.kt` double-reflection unseals Android 9-14 `VMRuntime.setHiddenApiExemptions` for unrestricted internal system service access.
+  - [x] **Dynamic ServiceManager Binder Proxying**: `VirtualServiceManagerHook.kt` proxies `android.os.ServiceManager.sCache` for core Android system services:
+    - **Telephony (`ITelephony`, `IPhoneSubInfo`)**: Spoofs `getDeviceId()`, `getImei()`, `getMeid()`, `getSubscriberId()` (IMSI), `getSimSerialNumber()`, `getLine1Number()`, and network/SIM carrier names.
+    - **Wi-Fi (`IWifiManager`)**: Spoofs `getConnectionInfo()` returning virtualized MAC address, BSSID, and SSID.
+    - **Location (`ILocationManager`)**: Spoofs `getLastLocation()` and `getLastKnownLocation()` returning configurable fake GPS latitude and longitude.
+  - [x] **Live UI Generator & Reroll**: `CloneSetupSheet` shows live Android ID, valid 3GPP IMEI (with Luhn check digit), and MAC address with one-tap batch rerolling.
 
 ### 4. Testing, Diagnostics & Verification
 - [x] **Automated Unit Tests**: `flutter test test/clone_app_test.dart` passes all 9 test suites.
@@ -92,7 +99,8 @@
 
 ---
 
-*Last Updated: October 2026 — Session 3 (GitHub repository setup & code sync)*  
+*Last Updated: October 2026 — Session 4 (SZPY / BOOSTIFLY Virtual Engine & ServiceManager Hooks)*  
 *Maintainer: Antigravity AI Engineering Team*
+
 
 
