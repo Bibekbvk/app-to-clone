@@ -5,12 +5,14 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.database.sqlite.SQLiteDatabase
+import com.virtual.engine.identity.DeviceIdentityProfile
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Isolated ContextWrapper that virtualizes all file, database, shared preferences,
- * and storage operations for a given profile ID and target package.
+ * storage operations, and device identity for a given profile ID and target package.
  *
  * Dedicated sandbox path:
  * /data/user/0/<host_pkg>/files/clones/<profile_id>/
@@ -18,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap
 class ContainerStorageContext(
     base: Context,
     val profileId: Int,
-    val targetPackage: String
+    val targetPackage: String,
+    val identityProfile: DeviceIdentityProfile? = null
 ) : ContextWrapper(base) {
 
     val profileRootDir: File by lazy {
@@ -27,9 +30,36 @@ class ContainerStorageContext(
         }
     }
 
+    val activeIdentity: DeviceIdentityProfile? by lazy {
+        identityProfile ?: loadIdentityProfile()
+    }
+
+    init {
+        // Automatically enforce device and hardware identity isolation
+        activeIdentity?.let {
+            DeviceIdentityProfile.applyFullIdentity(it)
+        }
+    }
+
+    private fun loadIdentityProfile(): DeviceIdentityProfile? {
+        return try {
+            val identityFile = File(profileRootDir, "clone_identity.json")
+            if (identityFile.exists()) {
+                val json = JSONObject(identityFile.readText())
+                DeviceIdentityProfile.fromJson(json)
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private val sharedPrefsMap = ConcurrentHashMap<String, SharedPreferences>()
 
     override fun getPackageName(): String = targetPackage
+
+    override fun getApplicationContext(): Context = this
 
     override fun getDataDir(): File = profileRootDir
 

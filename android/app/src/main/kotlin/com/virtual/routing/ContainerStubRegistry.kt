@@ -74,9 +74,29 @@ open class BaseContainerStubActivity : Activity() {
         val targetAppName = intent.getStringExtra("EXTRA_TARGET_APP_NAME") ?: targetPackage
         val displayBadge = intent.getStringExtra("EXTRA_DISPLAY_BADGE") ?: "C-${String.format("%02d", profileId)}"
         val cardTitle = profileName?.takeIf { it.isNotEmpty() } ?: "$targetAppName ($displayBadge)"
+        val cloneMode = intent.getStringExtra("EXTRA_CLONE_MODE") ?: "standalone"
+        val customAndroidId = intent.getStringExtra("EXTRA_ANDROID_ID")
+        val devicePreset = intent.getStringExtra("EXTRA_DEVICE_PRESET")
+
+        // Enforce full hardware & settings identity isolation immediately
+        val identityProfile = com.virtual.engine.identity.DeviceIdentityProfile.getProfileForClone(
+            cloneId = profileId,
+            preferredPreset = devicePreset,
+            customAndroidId = customAndroidId
+        )
+        com.virtual.engine.identity.DeviceIdentityProfile.applyFullIdentity(identityProfile)
 
         // Initialize dedicated virtualized storage context
-        storageContext = com.virtual.fs.ContainerStorageContext(this, profileId, targetPackage)
+        storageContext = com.virtual.fs.ContainerStorageContext(this, profileId, targetPackage, identityProfile)
+
+        // Isolate WebView Cookies and Storage for this specific clone
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                WebView.setDataDirectorySuffix("clone_$profileId")
+            } catch (e: Exception) {
+                // Ignore if already set in this process
+            }
+        }
 
         // Task description for Android OS Recents Switcher
         val color = when (profileId % 6) {
@@ -115,30 +135,16 @@ open class BaseContainerStubActivity : Activity() {
             return
         }
 
-        // DIRECT LAUNCH 2: If app is installed in a dual/work/twin profile (User 12 / 128 / 10), open real native dual app!
-        val launcherApps = getSystemService(Context.LAUNCHER_APPS_SERVICE) as? android.content.pm.LauncherApps
-        val userManager = getSystemService(Context.USER_SERVICE) as? android.os.UserManager
-        if (launcherApps != null && userManager != null) {
-            for (user in userManager.userProfiles) {
-                if (user != android.os.Process.myUserHandle()) {
-                    val acts = launcherApps.getActivityList(targetPackage, user)
-                    if (acts.isNotEmpty()) {
-                        launcherApps.startMainActivity(acts[0].componentName, user, null, null)
-                        finish()
-                        return
-                    }
-                }
+        // DIRECT LAUNCH 2: If standalone mode and APK is staged and ready to install, prompt installer immediately
+        if (cloneMode == "standalone") {
+            val apkDir = File(filesDir, "cloned_apks/$profileId")
+            val sanitizedAppName = targetAppName.replace(Regex("[^a-zA-Z0-9_]"), "")
+            val targetApk = File(apkDir, "${sanitizedAppName}_Clone_${displayBadge}.apk")
+            if (targetApk.exists() && targetApk.length() > 0) {
+                com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(this, targetApk)
+                finish()
+                return
             }
-        }
-
-        // DIRECT LAUNCH 3: If APK is staged and ready to install, prompt installer immediately
-        val apkDir = File(filesDir, "cloned_apks/$profileId")
-        val sanitizedAppName = targetAppName.replace(Regex("[^a-zA-Z0-9_]"), "")
-        val targetApk = File(apkDir, "${sanitizedAppName}_Clone_${displayBadge}.apk")
-        if (targetApk.exists() && targetApk.length() > 0) {
-            com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(this, targetApk)
-            finish()
-            return
         }
 
         // Fallback: If not yet installed or prepared, show diagnostic view

@@ -26,18 +26,24 @@ class CloneApp {
   static Future<int> createClone({
     required String packageName,
     String? displayName,
+    String? profileLabel,
     bool isSingleTask = false,
     bool silentInstall = false,
     bool keepDataIsolated = true,
     String mode = 'standalone',
+    String? devicePreset,
+    String? androidId,
   }) async {
     final result = await _methodsChannel.invokeMethod<dynamic>('createClone', {
       'packageName': packageName,
       'displayName': displayName,
+      'profileLabel': profileLabel,
       'isSingleTask': isSingleTask,
       'silentInstall': silentInstall,
       'keepDataIsolated': keepDataIsolated,
       'mode': mode,
+      'devicePreset': devicePreset,
+      'androidId': androidId,
     });
     if (result is num) {
       return result.toInt();
@@ -95,6 +101,18 @@ class CloneApp {
       } catch (_) {}
     }
     return [];
+  }
+
+  /// Fetches base64 encoded app icon for a specific package on demand.
+  static Future<String?> getAppIcon(String packageName) async {
+    try {
+      final result = await _methodsChannel.invokeMethod<String>('getAppIcon', {
+        'packageName': packageName,
+      });
+      return result;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Opens application settings or virtual details for a cloned or target package.

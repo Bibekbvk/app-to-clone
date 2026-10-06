@@ -1,5 +1,7 @@
 // lib/providers/clone_provider.dart
 
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -139,21 +141,29 @@ class CloneListNotifier extends AsyncNotifier<List<CloneInfo>> {
   Future<int> createClone({
     required String packageName,
     String? displayName,
+    String? profileLabel,
     bool isSingleTask = false,
     bool silentInstall = false,
     bool keepDataIsolated = true,
     bool pinToDesktop = false,
     String mode = 'standalone',
+    String? devicePreset,
+    String? deviceModel,
+    String? androidId,
+    String? advertisingId,
   }) async {
     int newId = -1;
     try {
       newId = await CloneApp.createClone(
         packageName: packageName,
         displayName: displayName,
+        profileLabel: profileLabel,
         isSingleTask: isSingleTask,
         silentInstall: silentInstall,
         keepDataIsolated: keepDataIsolated,
         mode: mode,
+        devicePreset: devicePreset,
+        androidId: androidId,
       );
     } catch (_) {
       // Fallback ID generation if running without native host
@@ -165,9 +175,13 @@ class CloneListNotifier extends AsyncNotifier<List<CloneInfo>> {
       id: newId > 0 ? newId : 1,
       packageName: packageName,
       displayName: displayName,
+      profileLabel: profileLabel,
       installPath: '/data/user/0/com.virtual.clone_app_flutter/files/clones/$newId/base.apk',
       isSingleTask: isSingleTask,
       mode: mode,
+      deviceModel: deviceModel,
+      androidId: androidId,
+      advertisingId: advertisingId,
     );
 
     final current = state.value ?? [];
@@ -313,4 +327,36 @@ final cloneModeProvider = NotifierProvider<CloneModeNotifier, CloneMode>(
 // -----------------------------------------------------------------------------
 final cloneProgressStreamProvider = StreamProvider.autoDispose<String>((ref) {
   return CloneApp.progressStream;
+});
+
+// -----------------------------------------------------------------------------
+// App Icon Bytes Provider (Fast Cache from installedAppsProvider or native bridge)
+// -----------------------------------------------------------------------------
+final appIconBytesProvider = FutureProvider.family<Uint8List?, String>((ref, packageName) async {
+  // Normalize base package name in case a cloned package name is passed (e.g. com.example.app.c01)
+  final basePackageName = packageName.replaceAll(RegExp(r'\.c\d+$', caseSensitive: false), '');
+
+  // 1. Check if already cached in installedAppsProvider
+  final installed = ref.watch(installedAppsProvider).value ?? [];
+  for (final app in installed) {
+    if ((app.packageName == packageName || app.packageName == basePackageName) &&
+        app.iconBytes != null &&
+        app.iconBytes!.isNotEmpty) {
+      return app.iconBytes;
+    }
+  }
+
+  // 2. Query native method bridge directly
+  var iconBase64 = await CloneApp.getAppIcon(packageName);
+  // 3. Fallback to base package name
+  if ((iconBase64 == null || iconBase64.isEmpty) && basePackageName != packageName) {
+    iconBase64 = await CloneApp.getAppIcon(basePackageName);
+  }
+
+  if (iconBase64 != null && iconBase64.isNotEmpty) {
+    try {
+      return base64Decode(iconBase64);
+    } catch (_) {}
+  }
+  return null;
 });

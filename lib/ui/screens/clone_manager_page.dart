@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/clone_info.dart';
 import '../../providers/clone_provider.dart';
 import '../sheets/clone_setup_sheet.dart';
+import '../widgets/clone_app_icon.dart';
 
 /// Main screen showcasing CloneManagerPage with Material 3 design,
 /// dynamic gradient app bar, glassmorphism card styling, animated entries,
@@ -543,37 +544,11 @@ class _CloneManagerPageState extends ConsumerState<CloneManagerPage>
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          theme.colorScheme.primary,
-                          theme.colorScheme.tertiary,
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: theme.colorScheme.primary.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: Text(
-                        'C$padId',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
+                  CloneAppIcon(
+                    packageName: clone.packageName,
+                    cloneId: clone.id,
+                    size: 52,
+                    borderRadius: 14,
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -647,31 +622,116 @@ class _CloneManagerPageState extends ConsumerState<CloneManagerPage>
                             ],
                           ],
                         ),
+                        const SizedBox(height: 5),
+                        // Profile label badge — the key differentiator for each clone
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    theme.colorScheme.primary.withValues(alpha: 0.18),
+                                    theme.colorScheme.primary.withValues(alpha: 0.08),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.badge_rounded,
+                                    size: 11,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    clone.effectiveProfileLabel,
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                         const SizedBox(height: 4),
                         Text(
                           clone.isStandalone
                               ? '${clone.packageName}.c$padId'
                               : clone.packageName,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 12,
                             color: theme.colorScheme.onSurfaceVariant,
                             fontFamily: 'monospace',
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 3),
                         Text(
                           clone.isStandalone
                               ? 'Native Linux UID • Zero Session Bleed • /data/data/${clone.packageName}.c$padId'
                               : 'Worker: :worker_$padId • Isolated WAL SQLite • /files/clones/${clone.id}',
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 10.5,
                             color: theme.colorScheme.outline,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (clone.deviceModel != null && clone.deviceModel!.isNotEmpty) ...[
+                          const SizedBox(height: 5),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.phonelink_setup_rounded, size: 10.5, color: Color(0xFF8B5CF6)),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      clone.deviceModel!,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF8B5CF6),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (clone.androidId != null && clone.androidId!.isNotEmpty) ...[
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'ID: ${clone.androidId}',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontFamily: 'monospace',
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),

@@ -18,6 +18,8 @@ import android.os.Looper
 import android.os.UserManager
 import android.provider.Settings
 import android.util.Base64
+import android.util.Log
+import android.widget.Toast
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -99,8 +101,11 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             "createClone" -> {
                 val packageName = call.argument<String>("packageName")
                 val displayName = call.argument<String>("displayName")
+                val profileLabel = call.argument<String>("profileLabel")
                 val isSingleTask = call.argument<Boolean>("isSingleTask") ?: false
                 val mode = call.argument<String>("mode") ?: "standalone"
+                val devicePreset = call.argument<String>("devicePreset")
+                val customAndroidId = call.argument<String>("androidId")
                 if (packageName.isNullOrBlank()) {
                     result.error("INVALID_ARGUMENT", "Package name cannot be null or blank", null)
                     return
@@ -108,7 +113,7 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
                 backgroundExecutor.execute {
                     try {
-                        val cloneId = executeCreateClone(packageName, displayName, isSingleTask, mode)
+                        val cloneId = executeCreateClone(packageName, displayName, profileLabel, isSingleTask, mode, devicePreset, customAndroidId)
                         mainHandler.post { result.success(cloneId) }
                     } catch (e: Exception) {
                         mainHandler.post {
@@ -186,6 +191,25 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                     result.success(null)
                 } catch (e: Exception) {
                     result.error("SETTINGS_ERROR", e.message, null)
+                }
+            }
+
+            "getAppIcon" -> {
+                val packageName = call.argument<String>("packageName")
+                if (packageName.isNullOrEmpty()) {
+                    result.success(null)
+                    return
+                }
+                backgroundExecutor.execute {
+                    try {
+                        val pm = context.packageManager
+                        val appInfo = pm.getApplicationInfo(packageName, 0)
+                        val drawable = pm.getApplicationIcon(appInfo)
+                        val iconBase64 = drawableToBase64(drawable)
+                        mainHandler.post { result.success(iconBase64) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.success(null) }
+                    }
                 }
             }
 
@@ -274,8 +298,11 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
     private fun executeCreateClone(
         packageName: String,
         displayName: String?,
+        profileLabel: String? = null,
         isSingleTask: Boolean,
-        mode: String = "standalone"
+        mode: String = "standalone",
+        devicePreset: String? = null,
+        customAndroidId: String? = null
     ): Int {
         val existingClones = getClonesListJson()
         val existingIds = (0 until existingClones.length()).map {
@@ -293,6 +320,12 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         if (assignedId == -1) {
             assignedId = (existingIds.maxOrNull() ?: 0) + 1
         }
+
+        val identityProfile = com.virtual.engine.identity.DeviceIdentityProfile.getProfileForClone(
+            cloneId = assignedId,
+            preferredPreset = devicePreset,
+            customAndroidId = customAndroidId
+        )
 
         val stubClass = getStubActivityClass(assignedId, isSingleTask)
         val padId = String.format("%02d", assignedId)
@@ -312,6 +345,11 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         File(cloneDir, "databases").apply { if (!exists()) mkdirs() }
         File(cloneDir, "shared_prefs").apply { if (!exists()) mkdirs() }
 
+        // Persist identity profile for sandbox & standalone reference
+        try {
+            File(cloneDir, "clone_identity.json").writeText(identityProfile.toJson().toString(2))
+        } catch (_: Exception) {}
+
         var targetApkPath = File(cloneDir, "base.apk").absolutePath
 
         if (mode == "standalone") {
@@ -325,13 +363,15 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             Thread.sleep(150)
 
             // Stage 2: APK Signing & Certificate Injection
-            postProgress(2, "Injecting original cert and signing APK with RSA-2048 testkey...")
+            postProgress(2, "Applying ${identityProfile.displayName} profile & signing APK...")
             val standaloneApk = com.virtual.engine.apk.StandaloneApkGenerator.prepareClonedApkFile(
                 context = context,
                 cloneId = assignedId,
                 targetPackage = packageName,
                 targetAppName = effectiveAppName,
-                displayBadge = badge
+                displayBadge = badge,
+                forceRegenerate = true,
+                identityProfile = identityProfile
             )
 
             if (standaloneApk != null && standaloneApk.exists()) {
@@ -391,10 +431,15 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             put("id", assignedId)
             put("packageName", packageName)
             put("displayName", displayName ?: "")
+            put("profileLabel", profileLabel ?: "")
             put("installPath", targetApkPath)
             put("isSingleTask", isSingleTask)
             put("stubClass", stubClass)
             put("mode", mode)
+            put("devicePreset", identityProfile.presetId)
+            put("deviceModel", identityProfile.displayName)
+            put("androidId", identityProfile.androidId)
+            put("advertisingId", identityProfile.advertisingId)
             put("createdAt", System.currentTimeMillis())
         }
 
@@ -434,7 +479,8 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             cloneId = cloneId,
             targetPackage = targetPkg,
             targetAppName = effectiveAppName,
-            displayBadge = badge
+            displayBadge = badge,
+            forceRegenerate = true
         ) ?: return false
 
         return com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(context, apkFile)
@@ -486,6 +532,9 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         var targetPkg = "com.app.clone"
         var displayName: String? = null
         var mode = "standalone"
+        var devicePreset: String? = null
+        var androidId: String? = null
+        var advertisingId: String? = null
 
         for (i in 0 until existing.length()) {
             val obj = existing.getJSONObject(i)
@@ -493,6 +542,9 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
                 targetPkg = obj.getString("packageName")
                 displayName = obj.optString("displayName").takeIf { it.isNotEmpty() }
                 mode = obj.optString("mode", "standalone")
+                devicePreset = obj.optString("devicePreset").takeIf { it.isNotEmpty() }
+                androidId = obj.optString("androidId").takeIf { it.isNotEmpty() }
+                advertisingId = obj.optString("advertisingId").takeIf { it.isNotEmpty() }
                 break
             }
         }
@@ -500,6 +552,31 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         val padId = String.format("%02d", cloneId)
         val standalonePkg = "$targetPkg.c$padId"
 
+        // MODE B: SANDBOX LAUNCH
+        if (mode == "sandbox") {
+            val stubClassName = getStubActivityClass(cloneId, isSingleTask)
+            val intent = Intent().apply {
+                component = ComponentName(context.packageName, stubClassName)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                        Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+                putExtra("com.virtual.EXTRA_PROFILE_ID", cloneId)
+                putExtra("com.virtual.EXTRA_TARGET_PACKAGE", targetPkg)
+                putExtra("EXTRA_PROFILE_ID", cloneId)
+                putExtra("EXTRA_PROFILE_NAME", displayName)
+                putExtra("EXTRA_TARGET_PKG", targetPkg)
+                putExtra("EXTRA_TARGET_APP_NAME", displayName ?: targetPkg)
+                putExtra("EXTRA_DISPLAY_BADGE", "C-$padId")
+                putExtra("EXTRA_CLONE_MODE", "sandbox")
+                putExtra("EXTRA_ANDROID_ID", androidId)
+                putExtra("EXTRA_DEVICE_PRESET", devicePreset)
+                putExtra("EXTRA_ADVERTISING_ID", advertisingId)
+            }
+            context.startActivity(intent)
+            return
+        }
+
+        // MODE A: STANDALONE MUTATED CLONE
         // 1. Priority: If standalone cloned APK is installed on device (e.g. com.pathao.user.c01), launch native app directly
         try {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(standalonePkg)
@@ -510,34 +587,49 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             }
         } catch (_: Exception) {}
 
-        // 2. Priority: If app is installed in a Work / Dual / Island Profile (e.g. User 12 or 128), launch real native dual app
-        try {
-            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
-            val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
-            if (launcherApps != null && userManager != null) {
-                for (user in userManager.userProfiles) {
-                    if (user != android.os.Process.myUserHandle()) {
-                        val acts = launcherApps.getActivityList(targetPkg, user)
-                        if (acts.isNotEmpty()) {
-                            launcherApps.startMainActivity(acts[0].componentName, user, null, null)
-                            return
-                        }
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-
-        // 3. Priority: If APK is staged and ready to install, prompt installer directly
+        // 2. Priority: If standalone APK is already generated and ready to install, prompt installer directly
         try {
             val apkDir = File(context.filesDir, "cloned_apks/$cloneId")
             val sanitizedAppName = (displayName ?: targetPkg).replace(Regex("[^a-zA-Z0-9_]"), "")
             val badge = "C-$padId"
             val targetApk = File(apkDir, "${sanitizedAppName}_Clone_${badge}.apk")
-            if (targetApk.exists() && targetApk.length() > 0) {
+            if (targetApk.exists() && targetApk.length() > 0 && com.virtual.engine.apk.StandaloneApkGenerator.isApkAligned(targetApk)) {
                 com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(context, targetApk)
+                mainHandler.post {
+                    Toast.makeText(context, "Please install ${displayName ?: targetPkg} to launch with separate account.", Toast.LENGTH_LONG).show()
+                }
                 return
             }
         } catch (_: Exception) {}
+
+        // 3. Priority: Generate standalone APK on demand and prompt installer
+        backgroundExecutor.execute {
+            try {
+                val effectiveAppName = displayName ?: targetPkg
+                val badge = "C-$padId"
+                val identity = com.virtual.engine.identity.DeviceIdentityProfile.getProfileForClone(
+                    cloneId = cloneId,
+                    preferredPreset = devicePreset,
+                    customAndroidId = androidId
+                )
+                val apk = com.virtual.engine.apk.StandaloneApkGenerator.prepareClonedApkFile(
+                    context = context,
+                    cloneId = cloneId,
+                    targetPackage = targetPkg,
+                    targetAppName = effectiveAppName,
+                    displayBadge = badge,
+                    forceRegenerate = true,
+                    identityProfile = identity
+                )
+                if (apk != null && apk.exists()) {
+                    mainHandler.post {
+                        com.virtual.engine.apk.StandaloneApkGenerator.promptInstallClonedApk(context, apk)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("CloneAppPlugin", "Failed staging clone $cloneId: ${e.message}")
+            }
+        }
 
         // 4. Fallback: Launch stub activity
         val stubClassName = getStubActivityClass(cloneId, isSingleTask)
@@ -555,6 +647,9 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             putExtra("EXTRA_TARGET_APP_NAME", displayName ?: targetPkg)
             putExtra("EXTRA_DISPLAY_BADGE", "C-$padId")
             putExtra("EXTRA_CLONE_MODE", mode)
+            putExtra("EXTRA_ANDROID_ID", androidId)
+            putExtra("EXTRA_DEVICE_PRESET", devicePreset)
+            putExtra("EXTRA_ADVERTISING_ID", advertisingId)
         }
 
         context.startActivity(intent)
@@ -565,14 +660,28 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         val list = mutableListOf<Map<String, Any?>>()
         for (i in 0 until jsonArray.length()) {
             val obj = jsonArray.getJSONObject(i)
+            val cId = obj.getInt("id")
+            val pkg = obj.getString("packageName")
+            val pad = String.format("%02d", cId)
+            val standalonePkg = "$pkg.c$pad"
+            val isInstalled = try {
+                context.packageManager.getPackageInfo(standalonePkg, 0) != null
+            } catch (e: Exception) {
+                false
+            }
             list.add(
                 mapOf(
-                    "id" to obj.getInt("id"),
-                    "packageName" to obj.getString("packageName"),
+                    "id" to cId,
+                    "packageName" to pkg,
                     "displayName" to obj.optString("displayName").takeIf { it.isNotEmpty() },
+                    "profileLabel" to obj.optString("profileLabel").takeIf { it.isNotEmpty() },
                     "installPath" to obj.getString("installPath"),
                     "isSingleTask" to obj.optBoolean("isSingleTask", false),
                     "mode" to obj.optString("mode", "standalone"),
+                    "deviceModel" to obj.optString("deviceModel").takeIf { it.isNotEmpty() },
+                    "androidId" to obj.optString("androidId").takeIf { it.isNotEmpty() },
+                    "advertisingId" to obj.optString("advertisingId").takeIf { it.isNotEmpty() },
+                    "isInstalled" to isInstalled,
                     "createdAt" to obj.optLong("createdAt", System.currentTimeMillis())
                 )
             )
@@ -587,12 +696,24 @@ class CloneAppPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         for (i in 0 until existing.length()) {
             val obj = existing.getJSONObject(i)
             if (obj.getInt("id") == cloneId) {
+                // Delete the installPath base APK file
                 val path = obj.optString("installPath")
                 if (path.isNotEmpty()) {
                     val file = File(path)
                     file.delete()
                     file.parentFile?.deleteRecursively()
                 }
+                // Delete the standalone cloned APK directory
+                val clonedApkDir = File(context.filesDir, "cloned_apks/$cloneId")
+                if (clonedApkDir.exists()) {
+                    clonedApkDir.deleteRecursively()
+                }
+                // Delete the sandbox clone container directory
+                val sandboxDir = File(context.filesDir, "clones/$cloneId")
+                if (sandboxDir.exists()) {
+                    sandboxDir.deleteRecursively()
+                }
+                Log.i("CloneAppPlugin", "Deleted clone #$cloneId and all associated data")
             } else {
                 updated.put(obj)
             }

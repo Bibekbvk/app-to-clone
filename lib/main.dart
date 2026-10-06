@@ -55,10 +55,11 @@ class AppToClone extends ConsumerWidget {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
-      initialRoute: '/',
+      initialRoute: '/home',
       routes: {
-        '/': (context) => const AnimatedSplashScreen(),
+        '/': (context) => const HomeShellScreen(),
         '/home': (context) => const HomeShellScreen(),
+        '/splash': (context) => const AnimatedSplashScreen(),
         '/manager': (context) => const CloneManagerPage(),
         '/apps': (context) => const AppListScreen(),
         '/inventory': (context) => const ClonesInventoryScreen(),
